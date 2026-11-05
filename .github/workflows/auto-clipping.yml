@@ -22,18 +22,18 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      # Step 1: Get original repository files
+      # 1. Checkout original clipping project
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Step 2: Set up Python
+      # 2. Set up Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
-      # Step 3: Install system dependencies
+      # 3. Install video-processing dependencies
       - name: Install FFmpeg
         run: |
           sudo apt-get update
@@ -42,35 +42,86 @@ jobs:
             libgl1 \
             libglib2.0-0
 
-      # Step 4: Install Python dependencies
+      # 4. Install the repository dependencies
       - name: Install Python Packages
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      # Step 5: Check Gemini API key
+      # 5. Install JavaScript runtime for yt-dlp
+      - name: Install Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # 6. Install latest yt-dlp and EJS support
+      - name: Update YouTube Downloader
+        run: |
+          python -m pip install --upgrade "yt-dlp[default]"
+          deno --version
+          python -m yt_dlp --version
+
+      # 7. Check the Gemini API key
       - name: Check Gemini API Key
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           if [ -z "$GOOGLE_API_KEY" ]; then
-            echo "GOOGLE_API_KEY is missing"
+            echo "ERROR: GOOGLE_API_KEY is missing"
             exit 1
           fi
+
           echo "Gemini API key configured"
 
-      # Step 6: Generate 3 vertical clips
+      # 8. Check the YouTube URL
+      - name: Validate YouTube URL
+        env:
+          VIDEO_URL: ${{ github.event.client_payload.video_url || github.event.client_payload.source_url || inputs.video_url }}
+        run: |
+          if [ -z "$VIDEO_URL" ]; then
+            echo "ERROR: YouTube URL is missing"
+            exit 1
+          fi
+
+          python - <<'PY'
+          import os
+          import sys
+          from urllib.parse import urlparse
+
+          url = os.environ["VIDEO_URL"]
+          parsed = urlparse(url)
+
+          allowed = {
+              "youtube.com",
+              "www.youtube.com",
+              "m.youtube.com",
+              "youtu.be"
+          }
+
+          if parsed.scheme != "https" or parsed.hostname not in allowed:
+              sys.exit("Invalid YouTube URL")
+
+          print("YouTube URL validated")
+          PY
+
+      # 9. Test YouTube access before processing
+      - name: Test YouTube Video Access
+        env:
+          VIDEO_URL: ${{ github.event.client_payload.video_url || github.event.client_payload.source_url || inputs.video_url }}
+        run: |
+          python -m yt_dlp \
+            --skip-download \
+            --no-playlist \
+            --remote-components ejs:github \
+            "$VIDEO_URL"
+
+      # 10. Generate 3 Shorts using opensource-clipping
       - name: Generate 3 Shorts
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           VIDEO_URL: ${{ github.event.client_payload.video_url || github.event.client_payload.source_url || inputs.video_url }}
           OMP_NUM_THREADS: "2"
         run: |
-          if [ -z "$VIDEO_URL" ]; then
-            echo "YouTube URL is missing"
-            exit 1
-          fi
-
           python -u main.py \
             --source youtube \
             --url "$VIDEO_URL" \
@@ -84,7 +135,7 @@ jobs:
             --no-bgm \
             --no-broll
 
-      # Step 7: Save generated videos
+      # 11. Upload generated videos
       - name: Upload Generated Shorts
         if: always()
         uses: actions/upload-artifact@v4

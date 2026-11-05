@@ -5,44 +5,74 @@ on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: "Google Drive video link"
+        description: "YouTube Video URL"
         required: true
         type: string
+
+  repository_dispatch:
+    types: [new_video]
 
 permissions:
   contents: read
 
 jobs:
   clipping:
+    name: Generate YouTube Shorts
     runs-on: ubuntu-latest
     timeout-minutes: 180
 
     steps:
-      - name: Checkout repository
+      # Step 1: Get original repository files
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # Step 2: Set up Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
+      # Step 3: Install system dependencies
       - name: Install FFmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y \
+            ffmpeg \
+            libgl1 \
+            libglib2.0-0
 
-      - name: Install Python dependencies
+      # Step 4: Install Python dependencies
+      - name: Install Python Packages
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
 
+      # Step 5: Check Gemini API key
+      - name: Check Gemini API Key
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          if [ -z "$GOOGLE_API_KEY" ]; then
+            echo "GOOGLE_API_KEY is missing"
+            exit 1
+          fi
+          echo "Gemini API key configured"
+
+      # Step 6: Generate 3 vertical clips
       - name: Generate 3 Shorts
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          VIDEO_URL: ${{ inputs.video_url }}
+          VIDEO_URL: ${{ github.event.client_payload.video_url || github.event.client_payload.source_url || inputs.video_url }}
+          OMP_NUM_THREADS: "2"
         run: |
+          if [ -z "$VIDEO_URL" ]; then
+            echo "YouTube URL is missing"
+            exit 1
+          fi
+
           python -u main.py \
-            --source gdrive \
+            --source youtube \
             --url "$VIDEO_URL" \
             --clips 3 \
             --ratio 9:16 \
@@ -54,7 +84,8 @@ jobs:
             --no-bgm \
             --no-broll
 
-      - name: Save generated videos
+      # Step 7: Save generated videos
+      - name: Upload Generated Shorts
         if: always()
         uses: actions/upload-artifact@v4
         with:
